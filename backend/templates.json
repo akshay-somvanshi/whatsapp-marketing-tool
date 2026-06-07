@@ -1,0 +1,11 @@
+[
+  {
+    "name": "review_request",
+    "display_name": "Post-Purchase Review Request",
+    "language": "en",
+    "params": [
+      { "slot": "1", "label": "Customer name", "example": "Priya" },
+      { "slot": "2", "label": "Product name", "example": "Gold Bangle Set" }
+    ]
+  }
+]

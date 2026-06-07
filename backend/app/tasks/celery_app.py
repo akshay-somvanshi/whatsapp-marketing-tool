@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
@@ -8,6 +9,7 @@ from celery import Celery
 from app.ai.handler import generate_reply
 from app.config import settings
 from app.database import async_session_factory
+from app.models.campaign import Campaign, CampaignStatus
 from app.models.contact import Contact
 from app.models.conversation import Conversation, ConversationStatus
 from app.models.message import Message, MessageDirection, MessageStatus
@@ -28,6 +30,20 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
 )
+
+celery_app.conf.beat_schedule = {
+    "check-session-expiry": {
+        "task": "tasks.check_session_expiry",
+        "schedule": 3600.0,  # every hour
+    },
+    "trigger-post-purchase": {
+        "task": "tasks.trigger_post_purchase",
+        "schedule": 3600.0,  # every hour
+    },
+}
+
+
+# ─── Phase 4: Inbound message processing ─────────────────────────────────────
 
 
 @celery_app.task(name="tasks.process_inbound_message")
@@ -183,3 +199,150 @@ async def _send_ai_reply(session, contact, conversation) -> None:
 
     except Exception:
         logger.exception("AI handler failed for contact %s", contact.phone)
+
+
+# ─── Phase 6: Campaign fanout ─────────────────────────────────────────────────
+
+
+@celery_app.task(name="tasks.send_campaign_task")
+def send_campaign_task(campaign_id: str) -> None:
+    asyncio.run(_send_campaign_async(campaign_id))
+
+
+async def _send_campaign_async(campaign_id: str) -> None:
+    """
+    Fan-out a campaign to all matching opted-in contacts.
+    Called directly in tests to avoid nested asyncio.run() issues.
+    """
+    async with async_session_factory() as session:
+        result = await session.execute(
+            sa.select(Campaign).where(Campaign.id == uuid.UUID(campaign_id))
+        )
+        campaign = result.scalar_one_or_none()
+        if campaign is None:
+            logger.error("Campaign %s not found", campaign_id)
+            return
+
+        campaign.status = CampaignStatus.running
+        await session.flush()
+
+        # Find opted-in contacts matching audience tags
+        stmt = sa.select(Contact).where(Contact.opted_in.is_(True))
+        if campaign.audience_tags:
+            stmt = stmt.where(
+                sa.or_(
+                    *(sa.literal(tag) == sa.func.any(Contact.tags) for tag in campaign.audience_tags)
+                )
+            )
+        contacts = (await session.execute(stmt)).scalars().all()
+
+        sent = 0
+        for contact in contacts:
+            try:
+                wa_msg_id = await wa_client.send_template_message(
+                    phone=contact.phone,
+                    template_name=campaign.template_name,
+                    language_code="en",
+                    components=[],
+                )
+                session.add(
+                    Message(
+                        contact_phone=contact.phone,
+                        direction=MessageDirection.outbound,
+                        body=f"[{campaign.template_name}]",
+                        status=MessageStatus.sent,
+                        wa_message_id=wa_msg_id,
+                        template_name=campaign.template_name,
+                    )
+                )
+                sent += 1
+            except Exception as exc:
+                logger.warning("Failed to send campaign msg to %s: %s", contact.phone, exc)
+
+        campaign.sent_count = sent
+        campaign.status = CampaignStatus.completed
+        await session.commit()
+
+
+# ─── Phase 6: Beat tasks ──────────────────────────────────────────────────────
+
+
+@celery_app.task(name="tasks.check_session_expiry")
+def check_session_expiry_task() -> None:
+    asyncio.run(_check_session_expiry_async())
+
+
+async def _check_session_expiry_async() -> None:
+    """Mark conversations whose 24-hour session window has elapsed as expired."""
+    async with async_session_factory() as session:
+        now = datetime.now(timezone.utc)
+        await session.execute(
+            sa.update(Conversation)
+            .where(
+                Conversation.session_expires_at < now,
+                Conversation.status == ConversationStatus.active,
+            )
+            .values(status=ConversationStatus.expired)
+        )
+        await session.commit()
+
+
+@celery_app.task(name="tasks.trigger_post_purchase")
+def trigger_post_purchase_task() -> None:
+    asyncio.run(_trigger_post_purchase_async())
+
+
+async def _trigger_post_purchase_async() -> None:
+    """
+    Send the review_request template to contacts tagged 'purchased' in the
+    last 72 hours who have not yet received it.  Idempotent: checks for an
+    existing outbound review_request message before sending.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
+
+    async with async_session_factory() as session:
+        contacts = (
+            await session.execute(
+                sa.select(Contact).where(
+                    sa.literal("purchased") == sa.func.any(Contact.tags),
+                    Contact.opted_in.is_(True),
+                    Contact.created_at >= cutoff,
+                )
+            )
+        ).scalars().all()
+
+        for contact in contacts:
+            already_sent = (
+                await session.execute(
+                    sa.select(Message).where(
+                        Message.contact_phone == contact.phone,
+                        Message.template_name == "review_request",
+                        Message.direction == MessageDirection.outbound,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if already_sent is not None:
+                continue
+
+            try:
+                wa_msg_id = await wa_client.send_template_message(
+                    phone=contact.phone,
+                    template_name="review_request",
+                    language_code="en",
+                    components=[],
+                )
+                session.add(
+                    Message(
+                        contact_phone=contact.phone,
+                        direction=MessageDirection.outbound,
+                        body="[review_request]",
+                        status=MessageStatus.sent,
+                        wa_message_id=wa_msg_id,
+                        template_name="review_request",
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to send review_request to %s: %s", contact.phone, exc)
+
+        await session.commit()
