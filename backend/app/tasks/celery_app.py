@@ -196,6 +196,34 @@ async def _send_ai_reply(session, contact, conversation) -> None:
         elif action == "escalate":
             conversation.ai_enabled = False
             logger.info("Escalated conversation for %s", contact.phone)
+            reply_text = action_result.get("text", "")
+            if reply_text:
+                sent_id = await wa_client.send_text_message(contact.phone, reply_text)
+                session.add(
+                    Message(
+                        contact_phone=contact.phone,
+                        direction=MessageDirection.outbound,
+                        body=reply_text,
+                        status=MessageStatus.sent,
+                        wa_message_id=sent_id,
+                    )
+                )
+
+        elif action == "save_review":
+            review_text = action_result.get("review", "")
+            reply_text = action_result.get("text", "")
+            logger.info("Review from %s: %s", contact.phone, review_text)
+            if reply_text:
+                sent_id = await wa_client.send_text_message(contact.phone, reply_text)
+                session.add(
+                    Message(
+                        contact_phone=contact.phone,
+                        direction=MessageDirection.outbound,
+                        body=reply_text,
+                        status=MessageStatus.sent,
+                        wa_message_id=sent_id,
+                    )
+                )
 
     except Exception:
         logger.exception("AI handler failed for contact %s", contact.phone)
