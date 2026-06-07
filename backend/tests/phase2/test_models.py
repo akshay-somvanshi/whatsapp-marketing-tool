@@ -1,4 +1,5 @@
 """Phase 2 — SQLAlchemy model and Alembic migration tests."""
+import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 
@@ -107,11 +108,18 @@ async def test_campaign_default_counts_and_status(db_session):
 
 def test_alembic_migration_at_head():
     """Verifies the wa_marketing DB has the latest migration applied."""
+    # Override DATABASE_URL so the subprocess checks wa_marketing, not wa_test
+    # (pytest.ini sets DATABASE_URL=wa_test for all test-scope processes).
+    env = {
+        **os.environ,
+        "DATABASE_URL": "postgresql+asyncpg://wa:wa@postgres:5432/wa_marketing",
+    }
     result = subprocess.run(
         ["alembic", "current"],
         capture_output=True,
         text=True,
         cwd="/app",
+        env=env,
     )
     assert result.returncode == 0, f"alembic current failed:\n{result.stderr}"
     assert "(head)" in result.stdout, (
