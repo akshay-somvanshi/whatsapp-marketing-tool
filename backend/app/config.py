@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     WEBHOOK_VERIFY_TOKEN: str = "dev_verify_token"
     ANTHROPIC_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
     MOCK_WHATSAPP: bool = True
     AI_HISTORY_LIMIT: int = 20
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
