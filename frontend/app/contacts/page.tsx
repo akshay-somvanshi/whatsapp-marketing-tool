@@ -5,10 +5,14 @@ import { api } from '@/lib/api';
 import type { Contact } from '@/lib/api';
 import { ContactsTable } from '@/components/ContactsTable';
 
+type ModalMode = 'add' | 'edit';
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
+  const [modalMode, setModalMode] = useState<ModalMode>('add');
   const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', opted_in: false, tags: '' });
   const [formError, setFormError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -20,24 +24,48 @@ export default function ContactsPage() {
     load();
   }, []);
 
-  const handleAddContact = async (e: React.FormEvent) => {
+  const openAdd = () => {
+    setModalMode('add');
+    setEditingId(null);
+    setForm({ name: '', phone: '', opted_in: false, tags: '' });
+    setFormError('');
+    setShowModal(true);
+  };
+
+  const openEdit = (contact: Contact) => {
+    setModalMode('edit');
+    setEditingId(contact.id);
+    setForm({ name: contact.name, phone: contact.phone, opted_in: contact.opted_in, tags: contact.tags.join(', ') });
+    setFormError('');
+    setShowModal(true);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
+    const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean);
     try {
-      await api.contacts.create({
-        name: form.name,
-        phone: form.phone,
-        opted_in: form.opted_in,
-        tags: form.tags
-          .split(',')
-          .map(t => t.trim())
-          .filter(Boolean),
-      });
+      if (modalMode === 'add') {
+        await api.contacts.create({ name: form.name, phone: form.phone, opted_in: form.opted_in, tags });
+      } else if (editingId) {
+        await api.contacts.update(editingId, { name: form.name, opted_in: form.opted_in, tags });
+      }
       setShowModal(false);
-      setForm({ name: '', phone: '', opted_in: false, tags: '' });
       load();
     } catch {
-      setFormError('Failed to create contact. Check phone number format (+E.164).');
+      setFormError(modalMode === 'add'
+        ? 'Failed to create contact. Check phone number format (+E.164).'
+        : 'Failed to update contact.');
+    }
+  };
+
+  const handleDelete = async (contact: Contact) => {
+    if (!confirm(`Delete ${contact.name}? This cannot be undone.`)) return;
+    try {
+      await api.contacts.delete(contact.id);
+      load();
+    } catch {
+      alert('Failed to delete contact.');
     }
   };
 
@@ -76,7 +104,7 @@ export default function ContactsPage() {
             onChange={handleImport}
           />
           <button
-            onClick={() => setShowModal(true)}
+            onClick={openAdd}
             className="rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
           >
             Add Contact
@@ -84,16 +112,16 @@ export default function ContactsPage() {
         </div>
       </div>
 
-      <ContactsTable contacts={contacts} />
+      <ContactsTable contacts={contacts} onEdit={openEdit} onDelete={handleDelete} />
 
       {showModal && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-            <h2 className="mb-4 text-lg font-bold">Add Contact</h2>
-            <form onSubmit={handleAddContact} className="flex flex-col gap-3">
-              {formError && (
-                <p className="text-sm text-red-600">{formError}</p>
-              )}
+            <h2 className="mb-4 text-lg font-bold">
+              {modalMode === 'add' ? 'Add Contact' : 'Edit Contact'}
+            </h2>
+            <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+              {formError && <p className="text-sm text-red-600">{formError}</p>}
               <input
                 required
                 placeholder="Name"
@@ -101,13 +129,15 @@ export default function ContactsPage() {
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />
-              <input
-                required
-                placeholder="+919876543210"
-                value={form.phone}
-                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
+              {modalMode === 'add' && (
+                <input
+                  required
+                  placeholder="+919876543210"
+                  value={form.phone}
+                  onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              )}
               <input
                 placeholder="Tags (comma-separated)"
                 value={form.tags}
@@ -134,7 +164,7 @@ export default function ContactsPage() {
                   type="submit"
                   className="flex-1 rounded-lg bg-green-600 py-2 text-sm font-medium text-white hover:bg-green-700"
                 >
-                  Save
+                  {modalMode === 'add' ? 'Save' : 'Update'}
                 </button>
               </div>
             </form>

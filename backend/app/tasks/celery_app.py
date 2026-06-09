@@ -5,15 +5,24 @@ from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
 from celery import Celery
+from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ai.handler import generate_reply
 from app.config import settings
-from app.database import async_session_factory
 from app.models.campaign import Campaign, CampaignStatus
 from app.models.contact import Contact
 from app.models.conversation import Conversation, ConversationStatus
 from app.models.message import Message, MessageDirection, MessageStatus
 from app.whatsapp.client import wa_client
+
+# NullPool avoids asyncpg "another operation is in progress" errors that occur
+# when asyncio.run() creates a new event loop but reuses pooled connections
+# bound to the previous loop.
+_celery_engine = create_async_engine(settings.DATABASE_URL, echo=False, poolclass=NullPool)
+_celery_session_factory = async_sessionmaker(
+    _celery_engine, expire_on_commit=False, class_=AsyncSession
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +74,7 @@ async def _process_inbound_message_async(payload: dict) -> None:
         logger.warning("Malformed webhook payload — skipping")
         return
 
-    async with async_session_factory() as session:
+    async with _celery_session_factory() as session:
         for status_update in value.get("statuses", []):
             await _handle_status_update(session, status_update)
         for msg_data in value.get("messages", []):
@@ -242,7 +251,7 @@ async def _send_campaign_async(campaign_id: str) -> None:
     Fan-out a campaign to all matching opted-in contacts.
     Called directly in tests to avoid nested asyncio.run() issues.
     """
-    async with async_session_factory() as session:
+    async with _celery_session_factory() as session:
         result = await session.execute(
             sa.select(Campaign).where(Campaign.id == uuid.UUID(campaign_id))
         )
@@ -302,7 +311,7 @@ def check_session_expiry_task() -> None:
 
 async def _check_session_expiry_async() -> None:
     """Mark conversations whose 24-hour session window has elapsed as expired."""
-    async with async_session_factory() as session:
+    async with _celery_session_factory() as session:
         now = datetime.now(timezone.utc)
         await session.execute(
             sa.update(Conversation)
@@ -328,7 +337,7 @@ async def _trigger_post_purchase_async() -> None:
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
 
-    async with async_session_factory() as session:
+    async with _celery_session_factory() as session:
         contacts = (
             await session.execute(
                 sa.select(Contact).where(

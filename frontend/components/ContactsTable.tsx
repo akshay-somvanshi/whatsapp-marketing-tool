@@ -3,7 +3,13 @@
 import { useState } from 'react';
 import type { Contact } from '@/lib/api';
 
-export function ContactsTable({ contacts }: { contacts: Contact[] }) {
+interface Props {
+  contacts: Contact[];
+  onEdit?: (contact: Contact) => void;
+  onDelete?: (contact: Contact) => void;
+}
+
+export function ContactsTable({ contacts, onEdit, onDelete }: Props) {
   const [search, setSearch] = useState('');
 
   const filtered = contacts.filter(
@@ -29,6 +35,9 @@ export function ContactsTable({ contacts }: { contacts: Contact[] }) {
               <th className="px-4 py-3 text-left">Phone</th>
               <th className="px-4 py-3 text-left">Opted In</th>
               <th className="px-4 py-3 text-left">Tags</th>
+              {(onEdit || onDelete) && (
+                <th className="px-4 py-3 text-left">Actions</th>
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -38,6 +47,28 @@ export function ContactsTable({ contacts }: { contacts: Contact[] }) {
                 <td className="px-4 py-3">{c.phone}</td>
                 <td className="px-4 py-3">{c.opted_in ? 'Yes' : 'No'}</td>
                 <td className="px-4 py-3">{c.tags.join(', ')}</td>
+                {(onEdit || onDelete) && (
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2">
+                      {onEdit && (
+                        <button
+                          onClick={() => onEdit(c)}
+                          className="text-blue-600 hover:underline"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {onDelete && (
+                        <button
+                          onClick={() => onDelete(c)}
+                          className="text-red-500 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

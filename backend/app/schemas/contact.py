@@ -23,6 +23,12 @@ class ContactCreate(BaseModel):
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
+class ContactUpdate(BaseModel):
+    name: str | None = None
+    opted_in: bool | None = None
+    tags: list[str] | None = None
+
+
 class ContactOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

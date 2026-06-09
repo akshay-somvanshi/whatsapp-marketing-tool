@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.contact import Contact
-from app.schemas.contact import ContactCreate, ContactOut
+from app.schemas.contact import ContactCreate, ContactOut, ContactUpdate
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -59,6 +59,33 @@ async def list_contacts(
 
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.patch("/{contact_id}", response_model=ContactOut)
+async def update_contact(contact_id: uuid.UUID, data: ContactUpdate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(sa.select(Contact).where(Contact.id == contact_id))
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if data.name is not None:
+        contact.name = data.name
+    if data.opted_in is not None:
+        contact.opted_in = data.opted_in
+    if data.tags is not None:
+        contact.tags = data.tags
+    await db.commit()
+    await db.refresh(contact)
+    return contact
+
+
+@router.delete("/{contact_id}", status_code=204)
+async def delete_contact(contact_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(sa.select(Contact).where(Contact.id == contact_id))
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    await db.delete(contact)
+    await db.commit()
 
 
 @router.post("/import")

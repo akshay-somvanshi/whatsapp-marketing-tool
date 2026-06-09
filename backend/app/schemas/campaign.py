@@ -35,6 +35,24 @@ class CampaignCreate(BaseModel):
         return v
 
 
+class CampaignUpdate(BaseModel):
+    name: str | None = None
+    template_name: str | None = None
+    template_params: dict | None = None
+    audience_tags: list[str] | None = None
+    scheduled_at: datetime | None = None
+
+    @field_validator("template_name")
+    @classmethod
+    def validate_template(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        valid = {t["name"] for t in _get_templates()}
+        if v not in valid:
+            raise ValueError(f"template '{v}' not found in templates.json")
+        return v
+
+
 class CampaignOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
