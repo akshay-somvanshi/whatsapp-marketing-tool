@@ -1,5 +1,11 @@
 [
   {
+    "name": "hello_world",
+    "display_name": "Hello World",
+    "language": "en_US",
+    "params": []
+  },
+  {
     "name": "review_request",
     "display_name": "Post-Purchase Review Request",
     "language": "en",

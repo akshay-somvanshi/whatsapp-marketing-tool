@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.campaign import Campaign
 from app.schemas.campaign import CampaignCreate, CampaignOut
+from app.tasks.celery_app import send_campaign_task
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -23,6 +24,7 @@ async def create_campaign(data: CampaignCreate, db: AsyncSession = Depends(get_d
     db.add(campaign)
     await db.commit()
     await db.refresh(campaign)
+    send_campaign_task.apply_async(args=[str(campaign.id)], queue="default")
     return campaign
 
 

@@ -270,7 +270,7 @@ async def _send_campaign_async(campaign_id: str) -> None:
                 wa_msg_id = await wa_client.send_template_message(
                     phone=contact.phone,
                     template_name=campaign.template_name,
-                    language_code="en",
+                    language_code="en_US",
                     components=[],
                 )
                 session.add(
@@ -357,7 +357,7 @@ async def _trigger_post_purchase_async() -> None:
                 wa_msg_id = await wa_client.send_template_message(
                     phone=contact.phone,
                     template_name="review_request",
-                    language_code="en",
+                    language_code="en_US",
                     components=[],
                 )
                 session.add(

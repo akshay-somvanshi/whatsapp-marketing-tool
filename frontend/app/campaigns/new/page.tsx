@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { CampaignForm } from '@/components/CampaignForm';
 import type { CampaignFormData } from '@/components/CampaignForm';
 
-const TEMPLATES = ['review_request'];
+const TEMPLATES = ['hello_world', 'review_request'];
 
 export default function NewCampaignPage() {
   const router = useRouter();

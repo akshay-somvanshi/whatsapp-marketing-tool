@@ -64,7 +64,7 @@ class WhatsAppClient:
 
         payload = {
             "messaging_product": "whatsapp",
-            "to": phone,
+            "to": phone.lstrip("+"),
             "type": "text",
             "text": {"body": text},
         }
@@ -90,7 +90,7 @@ class WhatsAppClient:
 
         payload = {
             "messaging_product": "whatsapp",
-            "to": phone,
+            "to": phone.lstrip("+"),
             "type": "template",
             "template": {
                 "name": template_name,
