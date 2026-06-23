@@ -45,3 +45,7 @@ class ConversationDetail(ConversationOut):
 
 class ConversationPatch(BaseModel):
     ai_enabled: bool
+
+
+class SendMessageRequest(BaseModel):
+    text: str

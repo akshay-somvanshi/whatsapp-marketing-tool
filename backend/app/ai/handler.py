@@ -43,8 +43,8 @@ def _parse_action(raw: str) -> dict:
     return action
 
 
-async def _call_anthropic(messages: list[dict], full_system: str) -> str:
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+async def _call_anthropic(messages: list[dict], full_system: str, api_key: str) -> str:
+    client = anthropic.AsyncAnthropic(api_key=api_key)
     response = await client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=500,
@@ -54,10 +54,10 @@ async def _call_anthropic(messages: list[dict], full_system: str) -> str:
     return response.content[0].text
 
 
-async def _call_gemini(messages: list[dict], full_system: str) -> str:
-    genai.configure(api_key=settings.GEMINI_API_KEY)
+async def _call_gemini(messages: list[dict], full_system: str, api_key: str) -> str:
+    genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        model_name="gemini-3.5-flash",
+        model_name="gemini-2.0-flash",
         system_instruction=full_system,
     )
     # Gemini uses "model" instead of "assistant" for the AI role
@@ -73,14 +73,28 @@ async def generate_reply(
     messages: list[dict[str, str]],
     contact_name: str,
     system_prompt: str = "",
+    *,
+    anthropic_api_key: str | None = None,
+    gemini_api_key: str | None = None,
+    ai_provider: str | None = None,
 ) -> dict:
+    """Generate a reply action. Per-org credentials/prompt take precedence over
+    the global env-configured defaults."""
     base_prompt = system_prompt or _load_system_prompt()
     full_system = base_prompt.replace("{contact_name}", contact_name)
 
-    if settings.ANTHROPIC_API_KEY:
-        raw = await _call_anthropic(messages, full_system)
-    elif settings.GEMINI_API_KEY:
-        raw = await _call_gemini(messages, full_system)
+    anthropic_key = anthropic_api_key or settings.ANTHROPIC_API_KEY
+    gemini_key = gemini_api_key or settings.GEMINI_API_KEY
+
+    # Provider selection: explicit provider wins; otherwise prefer whichever key exists.
+    if ai_provider == "gemini" and gemini_key:
+        raw = await _call_gemini(messages, full_system, gemini_key)
+    elif ai_provider == "anthropic" and anthropic_key:
+        raw = await _call_anthropic(messages, full_system, anthropic_key)
+    elif anthropic_key:
+        raw = await _call_anthropic(messages, full_system, anthropic_key)
+    elif gemini_key:
+        raw = await _call_gemini(messages, full_system, gemini_key)
     else:
         return _STUB_RESPONSE
 

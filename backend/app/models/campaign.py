@@ -2,7 +2,7 @@ import enum
 import uuid
 
 import sqlalchemy as sa
-from sqlalchemy import Column, DateTime, Enum, Integer, Text, func
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 
 from app.database import Base
@@ -20,6 +20,12 @@ class Campaign(Base):
     __tablename__ = "campaigns"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     name = Column(Text, nullable=False)
     template_name = Column(Text, nullable=False)
     template_params = Column(

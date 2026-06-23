@@ -14,7 +14,8 @@ from app.models.campaign import Campaign, CampaignStatus
 from app.models.contact import Contact
 from app.models.conversation import Conversation, ConversationStatus
 from app.models.message import Message, MessageDirection, MessageStatus
-from app.whatsapp.client import wa_client
+from app.models.organization import Organization
+from app.whatsapp.client import client_for_org
 
 # NullPool avoids asyncpg "another operation is in progress" errors that occur
 # when asyncio.run() creates a new event loop but reuses pooled connections
@@ -38,6 +39,7 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    task_default_queue="default",
 )
 
 celery_app.conf.beat_schedule = {
@@ -61,9 +63,26 @@ def process_inbound_message(payload: dict) -> None:
     asyncio.run(_process_inbound_message_async(payload))
 
 
+async def _resolve_org_by_phone_number_id(session, phone_number_id: str | None):
+    """Find the organization that owns the receiving WhatsApp number."""
+    if not phone_number_id:
+        return None
+    return (
+        await session.execute(
+            sa.select(Organization).where(
+                Organization.whatsapp_phone_number_id == phone_number_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def _process_inbound_message_async(payload: dict) -> None:
     """
     Full inbound message pipeline.
+
+    Resolves the owning organization from the payload's phone_number_id, then
+    processes status updates and inbound messages scoped to that org. Unknown
+    numbers are dropped (logged) so a misrouted webhook never errors.
 
     Called directly in tests (bypassing Celery) to avoid asyncio.run()
     being invoked inside a running event loop.
@@ -74,15 +93,24 @@ async def _process_inbound_message_async(payload: dict) -> None:
         logger.warning("Malformed webhook payload — skipping")
         return
 
+    phone_number_id = (value.get("metadata") or {}).get("phone_number_id")
+
     async with _celery_session_factory() as session:
+        org = await _resolve_org_by_phone_number_id(session, phone_number_id)
+        if org is None:
+            logger.warning(
+                "No organization for phone_number_id=%s — dropping event", phone_number_id
+            )
+            return
+
         for status_update in value.get("statuses", []):
-            await _handle_status_update(session, status_update)
+            await _handle_status_update(session, org, status_update)
         for msg_data in value.get("messages", []):
-            await _handle_inbound_message(session, msg_data)
+            await _handle_inbound_message(session, org, msg_data)
         await session.commit()
 
 
-async def _handle_status_update(session, status_update: dict) -> None:
+async def _handle_status_update(session, org, status_update: dict) -> None:
     wa_msg_id = status_update.get("id")
     raw_status = status_update.get("status")
     if not wa_msg_id or not raw_status:
@@ -93,14 +121,17 @@ async def _handle_status_update(session, status_update: dict) -> None:
         logger.warning("Unknown status value: %s", raw_status)
         return
     result = await session.execute(
-        sa.select(Message).where(Message.wa_message_id == wa_msg_id)
+        sa.select(Message).where(
+            Message.organization_id == org.id,
+            Message.wa_message_id == wa_msg_id,
+        )
     )
     msg = result.scalar_one_or_none()
     if msg:
         msg.status = new_status
 
 
-async def _handle_inbound_message(session, msg_data: dict) -> None:
+async def _handle_inbound_message(session, org, msg_data: dict) -> None:
     raw_phone = msg_data.get("from", "")
     phone = f"+{raw_phone}" if not raw_phone.startswith("+") else raw_phone
     wa_msg_id = msg_data.get("id") or None
@@ -109,16 +140,24 @@ async def _handle_inbound_message(session, msg_data: dict) -> None:
     if not phone or not body:
         return
 
-    # 1. Upsert contact
-    result = await session.execute(sa.select(Contact).where(Contact.phone == phone))
+    # 1. Upsert contact (scoped to org)
+    result = await session.execute(
+        sa.select(Contact).where(
+            Contact.organization_id == org.id,
+            Contact.phone == phone,
+        )
+    )
     contact = result.scalar_one_or_none()
     if contact is None:
-        contact = Contact(name=phone, phone=phone, opted_in=False)
+        contact = Contact(
+            organization_id=org.id, name=phone, phone=phone, opted_in=False
+        )
         session.add(contact)
         await session.flush()
 
     # 2. Save inbound message
     inbound = Message(
+        organization_id=org.id,
         contact_phone=phone,
         direction=MessageDirection.inbound,
         body=body,
@@ -131,18 +170,22 @@ async def _handle_inbound_message(session, msg_data: dict) -> None:
     # 3. Mark as read — best effort, never block the pipeline
     if wa_msg_id:
         try:
-            await wa_client.mark_as_read(wa_msg_id)
+            await client_for_org(org).mark_as_read(wa_msg_id)
         except Exception as exc:
             logger.warning("mark_as_read failed for %s: %s", wa_msg_id, exc)
 
     # 4. Upsert conversation — reset 24-hour session window
     expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     result = await session.execute(
-        sa.select(Conversation).where(Conversation.contact_phone == phone)
+        sa.select(Conversation).where(
+            Conversation.organization_id == org.id,
+            Conversation.contact_phone == phone,
+        )
     )
     conversation = result.scalar_one_or_none()
     if conversation is None:
         conversation = Conversation(
+            organization_id=org.id,
             contact_phone=phone,
             session_expires_at=expires_at,
             status=ConversationStatus.active,
@@ -161,14 +204,17 @@ async def _handle_inbound_message(session, msg_data: dict) -> None:
 
     # 6. AI auto-reply when enabled for this conversation
     if conversation.ai_enabled:
-        await _send_ai_reply(session, contact, conversation)
+        await _send_ai_reply(session, org, contact, conversation)
 
 
-async def _send_ai_reply(session, contact, conversation) -> None:
+async def _send_ai_reply(session, org, contact, conversation) -> None:
     try:
         result = await session.execute(
             sa.select(Message)
-            .where(Message.contact_phone == contact.phone)
+            .where(
+                Message.organization_id == org.id,
+                Message.contact_phone == contact.phone,
+            )
             .order_by(Message.created_at.asc())
             .limit(settings.AI_HISTORY_LIMIT)
         )
@@ -185,54 +231,32 @@ async def _send_ai_reply(session, contact, conversation) -> None:
         action_result = await generate_reply(
             messages=messages_for_ai,
             contact_name=contact.name,
+            system_prompt=org.system_prompt or "",
+            anthropic_api_key=org.anthropic_api_key,
+            gemini_api_key=org.gemini_api_key,
+            ai_provider=org.ai_provider,
         )
         action = action_result.get("action", "reply")
+        reply_text = action_result.get("text", "")
 
-        if action == "reply":
-            reply_text = action_result.get("text", "")
-            if reply_text:
-                sent_id = await wa_client.send_text_message(contact.phone, reply_text)
-                session.add(
-                    Message(
-                        contact_phone=contact.phone,
-                        direction=MessageDirection.outbound,
-                        body=reply_text,
-                        status=MessageStatus.sent,
-                        wa_message_id=sent_id,
-                    )
-                )
-
-        elif action == "escalate":
+        if action == "escalate":
             conversation.ai_enabled = False
             logger.info("Escalated conversation for %s", contact.phone)
-            reply_text = action_result.get("text", "")
-            if reply_text:
-                sent_id = await wa_client.send_text_message(contact.phone, reply_text)
-                session.add(
-                    Message(
-                        contact_phone=contact.phone,
-                        direction=MessageDirection.outbound,
-                        body=reply_text,
-                        status=MessageStatus.sent,
-                        wa_message_id=sent_id,
-                    )
-                )
-
         elif action == "save_review":
-            review_text = action_result.get("review", "")
-            reply_text = action_result.get("text", "")
-            logger.info("Review from %s: %s", contact.phone, review_text)
-            if reply_text:
-                sent_id = await wa_client.send_text_message(contact.phone, reply_text)
-                session.add(
-                    Message(
-                        contact_phone=contact.phone,
-                        direction=MessageDirection.outbound,
-                        body=reply_text,
-                        status=MessageStatus.sent,
-                        wa_message_id=sent_id,
-                    )
+            logger.info("Review from %s: %s", contact.phone, action_result.get("review", ""))
+
+        if reply_text:
+            sent_id = await client_for_org(org).send_text_message(contact.phone, reply_text)
+            session.add(
+                Message(
+                    organization_id=org.id,
+                    contact_phone=contact.phone,
+                    direction=MessageDirection.outbound,
+                    body=reply_text,
+                    status=MessageStatus.sent,
+                    wa_message_id=sent_id,
                 )
+            )
 
     except Exception:
         logger.exception("AI handler failed for contact %s", contact.phone)
@@ -248,8 +272,8 @@ def send_campaign_task(campaign_id: str) -> None:
 
 async def _send_campaign_async(campaign_id: str) -> None:
     """
-    Fan-out a campaign to all matching opted-in contacts.
-    Called directly in tests to avoid nested asyncio.run() issues.
+    Fan-out a campaign to all matching opted-in contacts within the campaign's
+    own organization. Called directly in tests to avoid nested asyncio.run().
     """
     async with _celery_session_factory() as session:
         result = await session.execute(
@@ -260,11 +284,23 @@ async def _send_campaign_async(campaign_id: str) -> None:
             logger.error("Campaign %s not found", campaign_id)
             return
 
+        org = (
+            await session.execute(
+                sa.select(Organization).where(Organization.id == campaign.organization_id)
+            )
+        ).scalar_one_or_none()
+        if org is None:
+            logger.error("Organization %s for campaign %s missing", campaign.organization_id, campaign_id)
+            return
+
         campaign.status = CampaignStatus.running
         await session.flush()
 
-        # Find opted-in contacts matching audience tags
-        stmt = sa.select(Contact).where(Contact.opted_in.is_(True))
+        # Opted-in contacts in this org matching audience tags
+        stmt = sa.select(Contact).where(
+            Contact.organization_id == org.id,
+            Contact.opted_in.is_(True),
+        )
         if campaign.audience_tags:
             stmt = stmt.where(
                 sa.or_(
@@ -273,10 +309,11 @@ async def _send_campaign_async(campaign_id: str) -> None:
             )
         contacts = (await session.execute(stmt)).scalars().all()
 
+        wa = client_for_org(org)
         sent = 0
         for contact in contacts:
             try:
-                wa_msg_id = await wa_client.send_template_message(
+                wa_msg_id = await wa.send_template_message(
                     phone=contact.phone,
                     template_name=campaign.template_name,
                     language_code="en_US",
@@ -284,6 +321,7 @@ async def _send_campaign_async(campaign_id: str) -> None:
                 )
                 session.add(
                     Message(
+                        organization_id=org.id,
                         contact_phone=contact.phone,
                         direction=MessageDirection.outbound,
                         body=f"[{campaign.template_name}]",
@@ -310,7 +348,8 @@ def check_session_expiry_task() -> None:
 
 
 async def _check_session_expiry_async() -> None:
-    """Mark conversations whose 24-hour session window has elapsed as expired."""
+    """Mark conversations whose 24-hour session window has elapsed as expired.
+    Time-based maintenance — applies across all organizations."""
     async with _celery_session_factory() as session:
         now = datetime.now(timezone.utc)
         await session.execute(
@@ -331,9 +370,10 @@ def trigger_post_purchase_task() -> None:
 
 async def _trigger_post_purchase_async() -> None:
     """
-    Send the review_request template to contacts tagged 'purchased' in the
-    last 72 hours who have not yet received it.  Idempotent: checks for an
-    existing outbound review_request message before sending.
+    Send the review_request template to contacts tagged 'purchased' in the last
+    72 hours who have not yet received it, across all organizations. Idempotent:
+    checks for an existing outbound review_request before sending, and uses each
+    contact's own organization credentials.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
 
@@ -348,10 +388,13 @@ async def _trigger_post_purchase_async() -> None:
             )
         ).scalars().all()
 
+        org_cache: dict[uuid.UUID, Organization] = {}
+
         for contact in contacts:
             already_sent = (
                 await session.execute(
                     sa.select(Message).where(
+                        Message.organization_id == contact.organization_id,
                         Message.contact_phone == contact.phone,
                         Message.template_name == "review_request",
                         Message.direction == MessageDirection.outbound,
@@ -362,8 +405,21 @@ async def _trigger_post_purchase_async() -> None:
             if already_sent is not None:
                 continue
 
+            org = org_cache.get(contact.organization_id)
+            if org is None:
+                org = (
+                    await session.execute(
+                        sa.select(Organization).where(
+                            Organization.id == contact.organization_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if org is None:
+                    continue
+                org_cache[contact.organization_id] = org
+
             try:
-                wa_msg_id = await wa_client.send_template_message(
+                wa_msg_id = await client_for_org(org).send_template_message(
                     phone=contact.phone,
                     template_name="review_request",
                     language_code="en_US",
@@ -371,6 +427,7 @@ async def _trigger_post_purchase_async() -> None:
                 )
                 session.add(
                     Message(
+                        organization_id=org.id,
                         contact_phone=contact.phone,
                         direction=MessageDirection.outbound,
                         body="[review_request]",

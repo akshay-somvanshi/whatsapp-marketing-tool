@@ -10,6 +10,7 @@ from app.models.contact import Contact
 from app.models.conversation import Conversation, ConversationStatus
 from app.models.message import Message, MessageDirection, MessageStatus
 from app.tasks.celery_app import _process_inbound_message_async
+from tests.conftest import DEFAULT_ORG_PNID
 
 
 # ---------------------------------------------------------------------------
@@ -21,6 +22,7 @@ def _inbound_payload(
     phone: str = "919876543210",
     body: str = "Hello",
     wa_msg_id: str = "wamid.test001",
+    phone_number_id: str = DEFAULT_ORG_PNID,
 ) -> dict:
     return {
         "object": "whatsapp_business_account",
@@ -29,6 +31,7 @@ def _inbound_payload(
                 "changes": [
                     {
                         "value": {
+                            "metadata": {"phone_number_id": phone_number_id},
                             "messages": [
                                 {
                                     "from": phone,
@@ -37,7 +40,7 @@ def _inbound_payload(
                                     "text": {"body": body},
                                     "type": "text",
                                 }
-                            ]
+                            ],
                         }
                     }
                 ]
@@ -46,7 +49,9 @@ def _inbound_payload(
     }
 
 
-def _status_payload(wa_msg_id: str, status: str) -> dict:
+def _status_payload(
+    wa_msg_id: str, status: str, phone_number_id: str = DEFAULT_ORG_PNID
+) -> dict:
     return {
         "object": "whatsapp_business_account",
         "entry": [
@@ -54,13 +59,14 @@ def _status_payload(wa_msg_id: str, status: str) -> dict:
                 "changes": [
                     {
                         "value": {
+                            "metadata": {"phone_number_id": phone_number_id},
                             "statuses": [
                                 {
                                     "id": wa_msg_id,
                                     "status": status,
                                     "timestamp": "1700000001",
                                 }
-                            ]
+                            ],
                         }
                     }
                 ]
@@ -117,7 +123,7 @@ async def test_webhook_post_returns_200_for_any_payload(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_inbound_message_is_saved_to_db(db_session):
+async def test_inbound_message_is_saved_to_db(db_session, default_org):
     await _process_inbound_message_async(
         _inbound_payload(phone="919111111111", body="Hi there", wa_msg_id="wamid.p4a")
     )
@@ -132,7 +138,7 @@ async def test_inbound_message_is_saved_to_db(db_session):
     assert msgs[0].body == "Hi there"
 
 
-async def test_conversation_session_expires_in_24h(db_session):
+async def test_conversation_session_expires_in_24h(db_session, default_org):
     before = datetime.now(timezone.utc)
     await _process_inbound_message_async(
         _inbound_payload(phone="919222222222", body="Hey", wa_msg_id="wamid.p4b")
@@ -151,7 +157,7 @@ async def test_conversation_session_expires_in_24h(db_session):
     assert expires <= (after + timedelta(hours=24, minutes=1))
 
 
-async def test_stop_message_opts_out_contact(db_session):
+async def test_stop_message_opts_out_contact(db_session, default_org):
     await _process_inbound_message_async(
         _inbound_payload(phone="919333333333", body="STOP", wa_msg_id="wamid.p4c")
     )
@@ -163,12 +169,13 @@ async def test_stop_message_opts_out_contact(db_session):
     assert contact.opted_in is False
 
 
-async def test_status_update_changes_message_status(db_session):
+async def test_status_update_changes_message_status(db_session, default_org):
     # Seed an outbound message with a known wa_message_id
-    contact = Contact(phone="+919444444444", name="Test", opted_in=True)
+    contact = Contact(organization_id=default_org.id, phone="+919444444444", name="Test", opted_in=True)
     db_session.add(contact)
     await db_session.flush()
     msg = Message(
+        organization_id=default_org.id,
         contact_phone="+919444444444",
         direction=MessageDirection.outbound,
         body="Hello from us",
@@ -189,15 +196,16 @@ async def test_status_update_changes_message_status(db_session):
     assert updated.status == MessageStatus.delivered
 
 
-async def test_ai_enabled_saves_outbound_reply(db_session, mock_claude):
+async def test_ai_enabled_saves_outbound_reply(db_session, default_org, mock_claude):
     phone = "+919555555555"
     future = datetime.now(timezone.utc) + timedelta(hours=24)
 
     # Pre-seed contact + ai-enabled conversation
-    contact = Contact(phone=phone, name="AI User", opted_in=True)
+    contact = Contact(organization_id=default_org.id, phone=phone, name="AI User", opted_in=True)
     db_session.add(contact)
     await db_session.flush()
     conv = Conversation(
+        organization_id=default_org.id,
         contact_phone=phone,
         ai_enabled=True,
         session_expires_at=future,

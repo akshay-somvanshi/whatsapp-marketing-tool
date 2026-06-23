@@ -1,7 +1,16 @@
 import enum
 import uuid
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    ForeignKeyConstraint,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database import Base
@@ -21,13 +30,22 @@ class MessageStatus(str, enum.Enum):
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "contact_phone"],
+            ["contacts.organization_id", "contacts.phone"],
+            ondelete="CASCADE",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    contact_phone = Column(
-        String(50),
-        ForeignKey("contacts.phone", ondelete="CASCADE"),
+    organization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
+    contact_phone = Column(String(50), nullable=False)
     direction = Column(
         Enum(MessageDirection, name="message_direction"), nullable=False
     )

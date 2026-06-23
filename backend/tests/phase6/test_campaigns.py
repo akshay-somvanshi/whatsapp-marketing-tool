@@ -72,13 +72,14 @@ async def test_list_campaigns_includes_stat_fields(client):
 # ---------------------------------------------------------------------------
 
 
-async def test_send_campaign_sends_to_opted_in_skips_opted_out(db_session):
+async def test_send_campaign_sends_to_opted_in_skips_opted_out(db_session, default_org):
     db_session.add_all([
-        Contact(phone="+919876543210", name="Priya", opted_in=True, tags=["purchased"]),
-        Contact(phone="+919876543211", name="Rahul", opted_in=False, tags=["purchased"]),
+        Contact(organization_id=default_org.id, phone="+919876543210", name="Priya", opted_in=True, tags=["purchased"]),
+        Contact(organization_id=default_org.id, phone="+919876543211", name="Rahul", opted_in=False, tags=["purchased"]),
     ])
     await db_session.flush()
     campaign = Campaign(
+        organization_id=default_org.id,
         name="Test Campaign",
         template_name="review_request",
         audience_tags=["purchased"],
@@ -97,8 +98,9 @@ async def test_send_campaign_sends_to_opted_in_skips_opted_out(db_session):
     assert updated.status == CampaignStatus.completed
 
 
-async def test_send_campaign_no_matching_contacts_completes_with_zero(db_session):
+async def test_send_campaign_no_matching_contacts_completes_with_zero(db_session, default_org):
     campaign = Campaign(
+        organization_id=default_org.id,
         name="Empty Campaign",
         template_name="review_request",
         audience_tags=["no_such_tag"],
@@ -122,12 +124,13 @@ async def test_send_campaign_no_matching_contacts_completes_with_zero(db_session
 # ---------------------------------------------------------------------------
 
 
-async def test_check_session_expiry_marks_past_conversations_expired(db_session):
-    contact = Contact(phone="+919876543210", name="Test", opted_in=True)
+async def test_check_session_expiry_marks_past_conversations_expired(db_session, default_org):
+    contact = Contact(organization_id=default_org.id, phone="+919876543210", name="Test", opted_in=True)
     db_session.add(contact)
     await db_session.flush()
 
     conv = Conversation(
+        organization_id=default_org.id,
         contact_phone="+919876543210",
         session_expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
         status=ConversationStatus.active,
@@ -147,8 +150,9 @@ async def test_check_session_expiry_marks_past_conversations_expired(db_session)
 # ---------------------------------------------------------------------------
 
 
-async def test_trigger_post_purchase_sends_and_does_not_double_send(db_session):
+async def test_trigger_post_purchase_sends_and_does_not_double_send(db_session, default_org):
     contact = Contact(
+        organization_id=default_org.id,
         phone="+919876543210",
         name="Priya",
         opted_in=True,

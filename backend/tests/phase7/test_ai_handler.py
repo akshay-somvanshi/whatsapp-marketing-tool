@@ -37,8 +37,12 @@ def anthropic_client(monkeypatch):
 
 @pytest.fixture
 def with_api_key(monkeypatch):
-    """Set a non-empty API key so generate_reply does not short-circuit to stub."""
-    monkeypatch.setattr("app.ai.handler.settings", MagicMock(ANTHROPIC_API_KEY="test-key"))
+    """Set a non-empty Anthropic key (and empty Gemini key) so generate_reply
+    deterministically routes to the mocked Anthropic client rather than stub/Gemini."""
+    monkeypatch.setattr(
+        "app.ai.handler.settings",
+        MagicMock(ANTHROPIC_API_KEY="test-key", GEMINI_API_KEY=""),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +96,10 @@ def test_parse_markdown_fenced_without_language_tag():
 
 
 async def test_stub_returned_when_api_key_empty(monkeypatch):
-    monkeypatch.setattr("app.ai.handler.settings", MagicMock(ANTHROPIC_API_KEY=""))
+    monkeypatch.setattr(
+        "app.ai.handler.settings",
+        MagicMock(ANTHROPIC_API_KEY="", GEMINI_API_KEY=""),
+    )
     result = await generate_reply([{"role": "user", "content": "Hi"}], contact_name="Priya")
     assert result == {"action": "reply", "text": "Thank you for your message!"}
 

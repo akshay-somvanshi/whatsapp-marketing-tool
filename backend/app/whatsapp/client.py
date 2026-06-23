@@ -152,10 +152,26 @@ class WhatsAppClient:
 
 
 # ---------------------------------------------------------------------------
-# Module-level singleton — used throughout the app via dependency injection
+# Module-level singleton — global/dev client (mock or env-configured).
 # ---------------------------------------------------------------------------
 wa_client = WhatsAppClient(
     mock=settings.MOCK_WHATSAPP,
     token=settings.WHATSAPP_API_TOKEN,
     phone_number_id=settings.WHATSAPP_PHONE_NUMBER_ID,
 )
+
+
+def client_for_org(org) -> "WhatsAppClient":
+    """Build a WhatsApp client using a specific organization's credentials.
+
+    In mock mode every org shares the global mock client (no real calls).
+    In live mode the org's own token + phone_number_id are used so each tenant
+    sends from its own WhatsApp number.
+    """
+    if settings.MOCK_WHATSAPP:
+        return wa_client
+    return WhatsAppClient(
+        mock=False,
+        token=org.whatsapp_api_token or settings.WHATSAPP_API_TOKEN,
+        phone_number_id=org.whatsapp_phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID,
+    )

@@ -95,7 +95,8 @@ async def test_send_text_message_posts_correct_body(httpx_mock):
     request = httpx_mock.get_requests()[0]
     assert request.headers["Authorization"] == f"Bearer {TEST_TOKEN}"
     body = json.loads(request.content)
-    assert body["to"] == "+919876543210"
+    # Meta's API expects the recipient without a leading "+"; the client strips it.
+    assert body["to"] == "919876543210"
     assert body["type"] == "text"
     assert body["text"]["body"] == "Hello there"
     assert body["messaging_product"] == "whatsapp"

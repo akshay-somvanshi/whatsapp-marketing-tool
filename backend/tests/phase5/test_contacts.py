@@ -31,8 +31,8 @@ async def test_create_contact_invalid_phone_returns_422(client):
     assert resp.status_code == 422
 
 
-async def test_create_contact_duplicate_phone_returns_409(client, db_session):
-    existing = Contact(phone="+919876543210", name="Original", opted_in=False)
+async def test_create_contact_duplicate_phone_returns_409(client, db_session, default_org):
+    existing = Contact(organization_id=default_org.id, phone="+919876543210", name="Original", opted_in=False)
     db_session.add(existing)
     await db_session.commit()
 
@@ -45,10 +45,10 @@ async def test_create_contact_duplicate_phone_returns_409(client, db_session):
 # ---------------------------------------------------------------------------
 
 
-async def test_list_contacts_search_filters_by_name(client, db_session):
+async def test_list_contacts_search_filters_by_name(client, db_session, default_org):
     db_session.add_all([
-        Contact(phone="+91111111111", name="Priya Sharma", opted_in=True),
-        Contact(phone="+91222222222", name="Rahul Kumar", opted_in=True),
+        Contact(organization_id=default_org.id, phone="+91111111111", name="Priya Sharma", opted_in=True),
+        Contact(organization_id=default_org.id, phone="+91222222222", name="Rahul Kumar", opted_in=True),
     ])
     await db_session.commit()
 
@@ -59,10 +59,10 @@ async def test_list_contacts_search_filters_by_name(client, db_session):
     assert data[0]["name"] == "Priya Sharma"
 
 
-async def test_list_contacts_tag_filter_returns_only_tagged(client, db_session):
+async def test_list_contacts_tag_filter_returns_only_tagged(client, db_session, default_org):
     db_session.add_all([
-        Contact(phone="+91111111111", name="Priya", opted_in=True, tags=["purchased", "vip"]),
-        Contact(phone="+91222222222", name="Rahul", opted_in=True, tags=["new"]),
+        Contact(organization_id=default_org.id, phone="+91111111111", name="Priya", opted_in=True, tags=["purchased", "vip"]),
+        Contact(organization_id=default_org.id, phone="+91222222222", name="Rahul", opted_in=True, tags=["new"]),
     ])
     await db_session.commit()
 
@@ -78,9 +78,9 @@ async def test_list_contacts_tag_filter_returns_only_tagged(client, db_session):
 # ---------------------------------------------------------------------------
 
 
-async def test_import_csv_valid_three_rows(client, db_session):
+async def test_import_csv_valid_three_rows(client, db_session, default_org):
     # Pre-insert one contact that will be upserted (not duplicated)
-    db_session.add(Contact(phone="+919876543211", name="Old Name", opted_in=False))
+    db_session.add(Contact(organization_id=default_org.id, phone="+919876543211", name="Old Name", opted_in=False))
     await db_session.commit()
 
     csv_body = "phone,name\n+919876543211,New Name\n+919876543212,User B\n+919876543213,User C"

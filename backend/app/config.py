@@ -19,5 +19,11 @@ class Settings(BaseSettings):
     AI_HISTORY_LIMIT: int = 20
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
+    # Auth / JWT
+    JWT_SECRET: str = "dev_jwt_secret_change_me"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_TTL_MIN: int = 30
+    REFRESH_TOKEN_TTL_DAYS: int = 14
+
 
 settings = Settings()

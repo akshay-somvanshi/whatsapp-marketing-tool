@@ -11,6 +11,8 @@ export default function InboxPage() {
   const [selected, setSelected] = useState<ConversationDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [threadLoading, setThreadLoading] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     api.conversations.list().then(setConversations).finally(() => setLoading(false));
@@ -32,6 +34,19 @@ export default function InboxPage() {
       ai_enabled: !selected.ai_enabled,
     });
     setSelected(s => (s ? { ...s, ai_enabled: updated.ai_enabled } : s));
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected || !replyText.trim()) return;
+    setSending(true);
+    try {
+      const msg = await api.conversations.sendMessage(selected.contact_phone, replyText.trim());
+      setSelected(s => s ? { ...s, messages: [...s.messages, msg] } : s);
+      setReplyText('');
+    } finally {
+      setSending(false);
+    }
   };
 
   if (loading) return <div className="p-6">Loading...</div>;
@@ -72,6 +87,22 @@ export default function InboxPage() {
                 <MessageThread messages={selected.messages} />
               )}
             </div>
+            <form onSubmit={handleSend} className="flex gap-2 border-t p-3">
+              <input
+                type="text"
+                value={replyText}
+                onChange={e => setReplyText(e.target.value)}
+                placeholder={selected.ai_enabled ? 'AI is handling this conversation…' : 'Reply as human…'}
+                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <button
+                type="submit"
+                disabled={sending || !replyText.trim()}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                Send
+              </button>
+            </form>
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center text-gray-400">
