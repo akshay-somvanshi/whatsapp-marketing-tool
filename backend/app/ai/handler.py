@@ -57,7 +57,7 @@ async def _call_anthropic(messages: list[dict], full_system: str, api_key: str) 
 async def _call_gemini(messages: list[dict], full_system: str, api_key: str) -> str:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
+        model_name="gemini-3.5-flash",
         system_instruction=full_system,
     )
     # Gemini uses "model" instead of "assistant" for the AI role
